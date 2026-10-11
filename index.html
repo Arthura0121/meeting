@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conference Scheduling</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, doc, onSnapshot, updateDoc, setDoc, deleteDoc, serverTimestamp, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // ⚠️ REPLACE THIS WITH YOUR FIREBASE CONFIG ⚠️
+        const firebaseConfig = {
+  apiKey: "AIzaSyCuIrVwsRbrxKPqxwuGxO5lMMhzqxBBVaI",
+  authDomain: "meeting-ed71e.firebaseapp.com",
+  projectId: "meeting-ed71e",
+  storageBucket: "meeting-ed71e.firebasestorage.app",
+  messagingSenderId: "632920055829",
+  appId: "1:632920055829:web:8f2798c4d4e0f03870ee1c",
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const slotsCol = collection(db, "slots");
+
+        // --- State Management ---
+        let isAdmin = false;
+        let currentReservationId = null;
+
+        // --- UI Elements ---
+        const userView = document.getElementById('userView');
+        const adminView = document.getElementById('adminView');
+        const slotsGrid = document.getElementById('slotsGrid');
+        const adminSlotsList = document.getElementById('adminSlotsList');
+
+        // --- Core Logic ---
+
+        // 1. Listen to Slots in Real-time
+        onSnapshot(slotsCol, (snapshot) => {
+            const slots = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            renderUserSlots(slots);
+            renderAdminSlots(slots);
+        });
+
+        function renderUserSlots(slots) {
+            slotsGrid.innerHTML = '';
+            slots.forEach(slot => {
+                const isExpired = slot.status === 'reserved' && (Date.now() - slot.reservedAt?.toDate().getTime() > 300000);
+                const status = isExpired ? 'available' : slot.status;
+                
+                const div = document.createElement('div');
+                div.className = `p-4 border rounded-lg cursor-pointer transition ${
+                    status === 'available' ? 'bg-green-100 hover:bg-green-200' : 
+                    status === 'reserved' ? 'bg-yellow-100' : 'bg-red-100 cursor-not-allowed'
+                }`;
+                
+                div.innerHTML = `
+                    <div class="font-bold">${slot.time}</div>
+                    <div class="text-sm">${slot.date} | ${slot.period}</div>
+                    <div class="text-xs mt-2 font-semibold">${status === 'booked' ? 'Booked by: ' + slot.userName : status.toUpperCase()}</div>
+                `;
+
+                if (status === 'available') {
+                    div.onclick = () => reserveSlot(slot.id);
+                } else if (status === 'booked') {
+                    div.onclick = () => promptModify(slot.id, slot.bookingCode);
+                }
+
+                slotsGrid.appendChild(div);
+            });
+        }
+
+        async function reserveSlot(id) {
+            const slotRef = doc(db, "slots", id);
+            await updateDoc(slotRef, {
+                status: 'reserved',
+                reservedAt: serverTimestamp()
+            });
+            
+            currentReservationId = id;
+            const name = prompt("Enter your Full Name:");
+            const assignment = prompt("Which assignment do you want to revise?");
+            
+            if (name && assignment) {
+                const bookingCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+                await updateDoc(slotRef, {
+                    status: 'booked',
+                    userName: name,
+                    assignment: assignment,
+                    bookingCode: bookingCode,
+                    userId: name.toLowerCase().replace(/\s/g, '') // Simple ID
+                });
+                alert(`Success! Your booking code is: ${bookingCode}. SAVE THIS CODE to change your appointment later.`);
+            } else {
+                // Cancel reservation if they didn't fill info
+                await updateDoc(slotRef, { status: 'available', reservedAt: null });
+            }
+        }
+
+        async function promptModify(id, code) {
+            const userCode = prompt("Enter your 6-digit Booking Code to modify this slot:");
+            if (userCode && userCode.toUpperCase() === code) {
+                if (confirm("Are you sure you want to cancel this appointment?")) {
+                    await updateDoc(doc(db, "slots", id), {
+                        status: 'available',
+                        userName: null,
+                        assignment: null,
+                        bookingCode: null
+                    });
+                }
+            } else {
+                alert("Incorrect code!");
+            }
+        }
+
+        // --- Admin Functions ---
+        window.toggleAdmin = () => {
+            const pw = prompt("Admin Password:");
+            if (pw === "admin123") { // Change this password!
+                isAdmin = !isAdmin;
+                userView.classList.toggle('hidden');
+                adminView.classList.toggle('hidden');
+            }
+        };
+
+        window.addSlot = async () => {
+            const date = document.getElementById('slotDate').value;
+            const period = document.getElementById('slotPeriod').value;
+            const time = document.getElementById('slotTime').value;
+            if (!date || !period || !time) return alert("Fill all fields");
+
+            await setDoc(doc(slotsCol), {
+                date, period, time, status: 'available',
+                userName: null, assignment: null, bookingCode: null
+            });
+            alert("Slot added!");
+        };
+
+        window.deleteSlot = async (id) => {
+            if (confirm("Delete this slot?")) await deleteDoc(doc(db, "slots", id));
+        };
+
+        function renderAdminSlots(slots) {
+            adminSlotsList.innerHTML = '';
+            slots.forEach(slot => {
+                const div = document.createElement('div');
+                div.className = "flex justify-between p-2 border-b";
+                div.innerHTML = `<span>${slot.date} ${slot.time} (${slot.status})</span> 
+                                 <button onclick="deleteSlot('${slot.id}')" class="text-red-500">Delete</button>`;
+                adminSlotsList.appendChild(div);
+            });
+        }
+    </script>
+</head>
+<body class="bg-gray-50 min-h-screen p-4 font-sans">
+
+    <nav class="max-w-4xl mx-auto flex justify-between items-center mb-8">
+        <h1 class="text-2xl font-bold text-gray-800">📅 Conference Sign-up</h1>
+        <button onclick="toggleAdmin()" class="text-xs text-gray-400 underline">Admin Login</button>
+    </nav>
+
+    <!-- USER VIEW -->
+    <div id="userView" class="max-w-4xl mx-auto">
+        <div class="bg-blue-600 text-white p-6 rounded-xl mb-8 shadow-lg">
+            <h2 class="text-xl font-bold mb-2">Instructions</h2>
+            <ul class="list-disc list-inside text-sm space-y-1 opacity-90">
+                <li>Pick an <b>Available</b> (Green) spot.</li>
+                <li>You only have <b>5 minutes</b> to complete your booking once you click.</li>
+                <li>Limit: <b>1 appointment per person</b>.</li>
+                <li>Save your <b>Booking Code</b> to change your time later.</li>
+            </ul>
+        </div>
+        <div id="slotsGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            <!-- Slots load here -->
+        </div>
+    </div>
+
+    <!-- ADMIN VIEW -->
+    <div id="adminView" class="max-w-4xl mx-auto hidden">
+        <div class="bg-white p-6 rounded-xl shadow-md mb-8 border border-gray-200">
+            <h2 class="text-xl font-bold mb-4">Add New Time Slot</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <input type="date" id="slotDate" class="border p-2 rounded">
+                <input type="text" id="slotPeriod" placeholder="e.g. Third Period" class="border p-2 rounded">
+                <input type="text" id="slotTime" placeholder="e.g. 9:46-9:56" class="border p-2 rounded">
+            </div>
+            <button onclick="addSlot()" class="mt-4 bg-blue-600 text-white px-6 py-2 rounded font-bold hover:bg-blue-700">Add Slot</button>
+        </div>
+        <div class="bg-white p-6 rounded-xl shadow-md border border-gray-200">
+            <h2 class="text-xl font-bold mb-4">Manage All Slots</h2>
+            <div id="adminSlotsList" class="space-y-2"></div>
+        </div>
+    </div>
+
+</body>
+</html>
